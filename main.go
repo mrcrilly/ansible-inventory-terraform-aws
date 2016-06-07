@@ -148,6 +148,11 @@ func listHostTags(attributes map[string]string) map[string]string {
 		}
 	}
 
+	tags["private_ip"] = attributes["private_ip"]
+	tags["private_dns"] = attributes["private_dns"]
+	tags["public_ip"] = attributes["public_ip"]
+	tags["public_dns"] = attributes["public_dns"]
+
 	return tags
 }
 
@@ -185,6 +190,15 @@ func main() {
 	if instanceNameTagEnv == "" {
 		instanceNameTagEnv = "Name"
 	}
+
+	// var iRequireIPs bool
+
+	// requireIPsEnv := os.Getenv("TF_STATE_REQUIRE_IPS")
+	// if requireIPsEnv == "" {
+	// 	iRequireIPs = false
+	// } else {
+	// 	iRequireIPs = true
+	// }
 
 	state, err := parseState(stateFile)
 	checkError(err)
