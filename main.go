@@ -21,7 +21,6 @@ type AnsibleInventoryGroup struct {
 
 type AnsibleInventory map[string]AnsibleInventoryGroup
 
-var version = flag.Bool("version", false, "print version information and exit")
 var list = flag.Bool("list", false, "list mode")
 var host = flag.String("host", "", "host mode")
 
@@ -52,7 +51,7 @@ func parseState(file string) (*terraform.State, error) {
 	return tfstate, nil
 }
 
-func listInventory(tfstate *terraform.State) (map[string]AnsibleInventoryGroup, error) {
+func listInventory(tfstate *terraform.State, expectedGroupName, expectedInstanceName string) (map[string]AnsibleInventoryGroup, error) {
 	if tfstate == nil {
 		return nil, errors.New("No state file provided")
 	}
@@ -65,12 +64,12 @@ func listInventory(tfstate *terraform.State) (map[string]AnsibleInventoryGroup, 
 				var groupName, instanceName string
 				var OK bool
 
-				if groupName, OK = R.Primary.Attributes["tags.Group"]; !OK {
-					return nil, errors.New("We need to see Group in the instance tags")
+				if groupName, OK = R.Primary.Attributes["tags."+expectedGroupName]; !OK {
+					continue
 				}
 
-				if instanceName, OK = R.Primary.Attributes["tags.Name"]; !OK {
-					return nil, errors.New("We need to see Name in the instance tags")
+				if instanceName, OK = R.Primary.Attributes["tags."+expectedInstanceName]; !OK {
+					continue
 				}
 
 				var ansibleGroup AnsibleInventoryGroup
@@ -86,6 +85,7 @@ func listInventory(tfstate *terraform.State) (map[string]AnsibleInventoryGroup, 
 				}
 
 				ansibleGroup.Hosts = append(inv[groupName].Hosts, instanceName)
+				ansibleGroup.Variables = nil // currently no sensible way to populate this
 				inv[groupName] = ansibleGroup
 			}
 		}
@@ -94,7 +94,7 @@ func listInventory(tfstate *terraform.State) (map[string]AnsibleInventoryGroup, 
 	return inv, nil
 }
 
-func listHost(tfstate *terraform.State, hostname string) (map[string]string, error) {
+func listHost(tfstate *terraform.State, hostname, expectedInstanceName string) (map[string]string, error) {
 	if tfstate == nil {
 		return nil, errors.New("No state file provided")
 	}
@@ -107,36 +107,48 @@ func listHost(tfstate *terraform.State, hostname string) (map[string]string, err
 				var instanceName string
 				var OK bool
 
-				if instanceName, OK = R.Primary.Attributes["tags.Name"]; !OK {
-					return nil, errors.New("We need to see Name in the instance tags")
+				if instanceName, OK = R.Primary.Attributes["tags."+expectedInstanceName]; !OK {
+					continue
 				}
 
 				if instanceName == hostname {
-					if tagCount, OK := R.Primary.Attributes["tags.#"]; OK {
-						if tagCount == "0" {
-							return inv, nil
-						}
-					} else {
-						return inv, nil // inv == empty map
-					}
-
-					for AK, A := range R.Primary.Attributes {
-						if tagsRegexp.MatchString(AK) {
-							variableName := strings.SplitN(AK, ".", 2)[1]
-
-							if variableName == "#" {
-								continue
-							}
-
-							inv[variableName] = A
-						}
-					}
+					inv = listHostTags(R.Primary.Attributes)
 				}
 			}
 		}
 	}
 
 	return inv, nil
+}
+
+func listHostTags(attributes map[string]string) map[string]string {
+	if attributes == nil {
+		return nil
+	}
+
+	var tags map[string]string = make(map[string]string, 0)
+
+	if tagCount, OK := attributes["tags.#"]; OK {
+		if tagCount == "0" {
+			return nil
+		}
+	} else {
+		return nil
+	}
+
+	for AK, A := range attributes {
+		if tagsRegexp.MatchString(AK) {
+			variableName := strings.SplitN(AK, ".", 2)[1]
+
+			if variableName == "#" {
+				continue
+			}
+
+			tags[variableName] = A
+		}
+	}
+
+	return tags
 }
 
 func outputJson(raw interface{}) error {
@@ -154,19 +166,31 @@ func main() {
 	flag.Parse()
 
 	var stateFile string
-	fromTheEnvironment := os.Getenv("TF_STATE")
+	stateFileEnv := os.Getenv("TF_STATE")
 
-	if fromTheEnvironment != "" {
-		stateFile = fromTheEnvironment
+	if stateFileEnv != "" {
+		stateFile = stateFileEnv
 	} else {
 		stateFile = "./terraform.tfstate"
+	}
+
+	groupNameTagEnv := os.Getenv("TF_STATE_GROUP_TAG")
+
+	if groupNameTagEnv == "" {
+		groupNameTagEnv = "Group"
+	}
+
+	instanceNameTagEnv := os.Getenv("TF_STATE_INSTANCE_TAG")
+
+	if instanceNameTagEnv == "" {
+		instanceNameTagEnv = "Name"
 	}
 
 	state, err := parseState(stateFile)
 	checkError(err)
 
 	if *list {
-		fullInventory, err := listInventory(state)
+		fullInventory, err := listInventory(state, groupNameTagEnv, instanceNameTagEnv)
 		checkError(err)
 
 		outputJson(fullInventory)
@@ -174,7 +198,7 @@ func main() {
 	}
 
 	if !*list && *host != "" {
-		hostVariables, err := listHost(state, *host)
+		hostVariables, err := listHost(state, *host, instanceNameTagEnv)
 		checkError(err)
 
 		outputJson(hostVariables)
