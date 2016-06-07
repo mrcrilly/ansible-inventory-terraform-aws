@@ -1,6 +1,13 @@
 # Ansible Terraform AWS - Dynamic Inventory
 Combining Terraform an Ansible together greats a powerful team, but they're unlinkable without Ansible being able to read Terraform's state files. This code will allow you to use your AWS focused Terraform state files as dynamic inventories within Ansible, with some extra magic thrown in.
 
+## Installation
+You will need to build the binaries your self, for your required platforms, using a Go installation. I do not have the capacility or time to manage pre-compiled binaries, unless someone can make a suggestion for making that an easy task? Perhaps some TravisCI work? Let me know.
+
+`go install github.com/mrcrilly/ansible-inventory-terraform-aws`
+
+You should now have `$GOBIN/ansible-inventory-terraform-aws(.exe?)`
+
 ## Usage
 Ansible expects two flags to be present on a dynamic inventory:
 
@@ -64,6 +71,18 @@ The host level variables are parsed using a simple regular expression and follow
 * Store the above value as a key in a dict, setting its value to the value of the attribute from the state file;
 
 For you, this simply means any tags you define in Terraform will be taken as host level variables and provided as such to Ansible. Hopefully this is a sensible way of doing this and you'll agree it's useful.
+
+## IP Addresses
+When pulling in the IP addresses from the state file, we simply use, at this point in time, whatever is provided by the following attribute keys:
+
+* private_ip
+* private_dns
+* public_ip
+* public_dns
+
+We basically map these, one-to-one to the host variables returned to Ansible. Also, this should include EIPs you attach to instances via Terraform, as you're reading the state file after everything has been built and linked together.
+
+That being said, we don't currently set the `ansible_ssh_host` variable to whatever we find as this is rather intrusive and which IP do we pick? Instead you should use the host variables provided above to set the host IP you want to Ansible to SSH too.
 
 ## Overriding Tags
 As weve said above, two tags are important to make this dynamic inventory work: `Name` and `Group`. That being said, these two tags can be overridden using two environment variables:
