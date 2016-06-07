@@ -85,7 +85,6 @@ func listInventory(tfstate *terraform.State, expectedGroupName, expectedInstance
 				}
 
 				ansibleGroup.Hosts = append(inv[groupName].Hosts, instanceName)
-				ansibleGroup.Variables = nil // currently no sensible way to populate this
 				inv[groupName] = ansibleGroup
 			}
 		}
