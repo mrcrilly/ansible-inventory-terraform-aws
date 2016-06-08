@@ -190,15 +190,6 @@ func main() {
 		instanceNameTagEnv = "Name"
 	}
 
-	// var iRequireIPs bool
-
-	// requireIPsEnv := os.Getenv("TF_STATE_REQUIRE_IPS")
-	// if requireIPsEnv == "" {
-	// 	iRequireIPs = false
-	// } else {
-	// 	iRequireIPs = true
-	// }
-
 	state, err := parseState(stateFile)
 	checkError(err)
 
