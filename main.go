@@ -11,6 +11,11 @@ import (
 )
 
 import (
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/s3"
+	"github.com/aws/aws-sdk-go/service/s3/s3manager"
+
 	"github.com/hashicorp/terraform/terraform"
 )
 
@@ -28,7 +33,8 @@ var tagsRegexp = regexp.MustCompile(`^tags\..+`)
 
 func checkError(err error) {
 	if err != nil {
-		panic(err)
+		fmt.Printf("Error: " + err.Error())
+		os.Exit(1)
 	}
 }
 
@@ -166,6 +172,37 @@ func outputJson(raw interface{}) error {
 	return nil
 }
 
+func downloadStateFromS3(bucket, key, toFile string) error {
+	s3Region := os.Getenv("AWS_DEFAULT_REGION")
+
+	if s3Region == "" {
+		return errors.New("AWS region is required in environment variable: AWS_DEFAULT_REGION.")
+	}
+
+	file, err := os.Create(toFile)
+
+	if err != nil {
+		return err
+	}
+
+	defer file.Close()
+
+	downloader := s3manager.NewDownloader(session.New(&aws.Config{Region: aws.String(s3Region)}))
+
+	_o := &s3.GetObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	}
+
+	_, err = downloader.Download(file, _o)
+
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func main() {
 	flag.Parse()
 
@@ -176,6 +213,15 @@ func main() {
 		stateFile = stateFileEnv
 	} else {
 		stateFile = "./terraform.tfstate"
+	}
+
+	s3BucketName := os.Getenv("TF_S3_BUCKET_NAME")
+	s3BucketKey := os.Getenv("TF_S3_BUCKET_KEY")
+
+	if s3BucketName != "" && s3BucketKey != "" {
+		fmt.Println("Downloading state from S3")
+		err := downloadStateFromS3(s3BucketName, s3BucketKey, stateFile)
+		checkError(err)
 	}
 
 	groupNameTagEnv := os.Getenv("TF_STATE_GROUP_TAG")
@@ -189,15 +235,6 @@ func main() {
 	if instanceNameTagEnv == "" {
 		instanceNameTagEnv = "Name"
 	}
-
-	// var iRequireIPs bool
-
-	// requireIPsEnv := os.Getenv("TF_STATE_REQUIRE_IPS")
-	// if requireIPsEnv == "" {
-	// 	iRequireIPs = false
-	// } else {
-	// 	iRequireIPs = true
-	// }
 
 	state, err := parseState(stateFile)
 	checkError(err)
