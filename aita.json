@@ -1,0 +1,11 @@
+{
+    "state_file": "/tmp/terraform.tfstate",
+    "s3": {
+        "bucket_name": "super-awesome-bucket",
+        "bucket_key": "states/terraform.tfstate"
+    },
+    "options": {
+        "group_name_tag": "Group",
+        "instance_name_tag": "Name"
+    }
+}

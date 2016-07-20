@@ -1,246 +1,46 @@
 package main
 
 import (
-	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"os"
-	"regexp"
-	"strings"
 )
-
-import (
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/s3"
-	"github.com/aws/aws-sdk-go/service/s3/s3manager"
-
-	"github.com/hashicorp/terraform/terraform"
-)
-
-type AnsibleInventoryGroup struct {
-	Hosts     []string          `json:"hosts"`
-	Variables map[string]string `json:"vars"`
-}
-
-type AnsibleInventory map[string]AnsibleInventoryGroup
 
 var list = flag.Bool("list", false, "list mode")
 var host = flag.String("host", "", "host mode")
 
-var tagsRegexp = regexp.MustCompile(`^tags\..+`)
-
-func checkError(err error) {
-	if err != nil {
-		fmt.Printf("Error: " + err.Error())
-		os.Exit(1)
-	}
-}
-
-func parseState(file string) (*terraform.State, error) {
-	var tfstate *terraform.State
-
-	fd, err := os.Open(file)
-
-	if err != nil {
-		return nil, err
-	}
-
-	jsonDecoder := json.NewDecoder(fd)
-	err = jsonDecoder.Decode(&tfstate)
-
-	if err != nil {
-		return nil, err
-	}
-
-	return tfstate, nil
-}
-
-func listInventory(tfstate *terraform.State, expectedGroupName, expectedInstanceName string) (map[string]AnsibleInventoryGroup, error) {
-	if tfstate == nil {
-		return nil, errors.New("No state file provided")
-	}
-
-	var inv map[string]AnsibleInventoryGroup = make(map[string]AnsibleInventoryGroup, 0)
-
-	for _, M := range tfstate.Modules {
-		for _, R := range M.Resources {
-			if R.Type == "aws_instance" {
-				var groupName, instanceName string
-				var OK bool
-
-				if groupName, OK = R.Primary.Attributes["tags."+expectedGroupName]; !OK {
-					continue
-				}
-
-				if instanceName, OK = R.Primary.Attributes["tags."+expectedInstanceName]; !OK {
-					continue
-				}
-
-				var ansibleGroup AnsibleInventoryGroup
-
-				if _, OK := inv[groupName]; !OK {
-					ansibleGroup = AnsibleInventoryGroup{}
-					ansibleGroup.Hosts = []string{}
-					ansibleGroup.Variables = make(map[string]string, 1)
-
-					inv[groupName] = ansibleGroup
-				} else {
-					ansibleGroup = inv[groupName]
-				}
-
-				ansibleGroup.Hosts = append(inv[groupName].Hosts, instanceName)
-				inv[groupName] = ansibleGroup
-			}
-		}
-	}
-
-	return inv, nil
-}
-
-func listHost(tfstate *terraform.State, hostname, expectedInstanceName string) (map[string]string, error) {
-	if tfstate == nil {
-		return nil, errors.New("No state file provided")
-	}
-
-	var inv map[string]string = make(map[string]string, 0)
-
-	for _, M := range tfstate.Modules {
-		for _, R := range M.Resources {
-			if R.Type == "aws_instance" {
-				var instanceName string
-				var OK bool
-
-				if instanceName, OK = R.Primary.Attributes["tags."+expectedInstanceName]; !OK {
-					continue
-				}
-
-				if instanceName == hostname {
-					inv = listHostTags(R.Primary.Attributes)
-				}
-			}
-		}
-	}
-
-	return inv, nil
-}
-
-func listHostTags(attributes map[string]string) map[string]string {
-	if attributes == nil {
-		return nil
-	}
-
-	var tags map[string]string = make(map[string]string, 0)
-
-	if tagCount, OK := attributes["tags.#"]; OK {
-		if tagCount == "0" {
-			return nil
-		}
-	} else {
-		return nil
-	}
-
-	for AK, A := range attributes {
-		if tagsRegexp.MatchString(AK) {
-			variableName := strings.SplitN(AK, ".", 2)[1]
-
-			if variableName == "#" {
-				continue
-			}
-
-			tags[variableName] = A
-		}
-	}
-
-	tags["private_ip"] = attributes["private_ip"]
-	tags["private_dns"] = attributes["private_dns"]
-	tags["public_ip"] = attributes["public_ip"]
-	tags["public_dns"] = attributes["public_dns"]
-
-	return tags
-}
-
-func outputJson(raw interface{}) error {
-	rawToJson, err := json.Marshal(raw)
-
-	if err != nil {
-		return err
-	}
-
-	fmt.Printf("%s", string(rawToJson))
-	return nil
-}
-
-func downloadStateFromS3(bucket, key, toFile string) error {
-	s3Region := os.Getenv("AWS_DEFAULT_REGION")
-
-	if s3Region == "" {
-		return errors.New("AWS region is required in environment variable: AWS_DEFAULT_REGION.")
-	}
-
-	file, err := os.Create(toFile)
-
-	if err != nil {
-		return err
-	}
-
-	defer file.Close()
-
-	downloader := s3manager.NewDownloader(session.New(&aws.Config{Region: aws.String(s3Region)}))
-
-	_o := &s3.GetObjectInput{
-		Bucket: aws.String(bucket),
-		Key:    aws.String(key),
-	}
-
-	_, err = downloader.Download(file, _o)
-
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
 func main() {
 	flag.Parse()
 
-	var stateFile string
-	stateFileEnv := os.Getenv("TF_STATE")
+	configFile := "./aita.json"
+	config, err := parseConfiguration(configFile)
+	checkError(err)
 
-	if stateFileEnv != "" {
-		stateFile = stateFileEnv
-	} else {
-		stateFile = "./terraform.tfstate"
+	if config.StateFile == "" {
+		fmt.Fprint(os.Stderr, "State file location needed.")
+		os.Exit(1)
 	}
 
-	s3BucketName := os.Getenv("TF_S3_BUCKET_NAME")
-	s3BucketKey := os.Getenv("TF_S3_BUCKET_KEY")
-
-	if s3BucketName != "" && s3BucketKey != "" {
-		fmt.Println("Downloading state from S3")
-		err := downloadStateFromS3(s3BucketName, s3BucketKey, stateFile)
-		checkError(err)
+	if config.S3 != nil {
+		if config.S3.BucketName != "" && config.S3.BucketKey != "" {
+			err := downloadStateFromS3(config.S3.BucketName, config.S3.BucketKey, config.StateFile)
+			checkError(err)
+		}
 	}
 
-	groupNameTagEnv := os.Getenv("TF_STATE_GROUP_TAG")
-
-	if groupNameTagEnv == "" {
-		groupNameTagEnv = "Group"
+	if _, OK := config.Options["instance_name_tag"]; !OK {
+		config.Options["instance_name_tag"] = "Name"
 	}
 
-	instanceNameTagEnv := os.Getenv("TF_STATE_INSTANCE_TAG")
-
-	if instanceNameTagEnv == "" {
-		instanceNameTagEnv = "Name"
+	if _, OK := config.Options["group_name_tag"]; !OK {
+		config.Options["group_name_tag"] = "Group"
 	}
 
-	state, err := parseState(stateFile)
+	state, err := parseState(config.StateFile)
 	checkError(err)
 
 	if *list {
-		fullInventory, err := listInventory(state, groupNameTagEnv, instanceNameTagEnv)
+		fullInventory, err := listInventory(state, config.Options["group_name_tag"], config.Options["instance_name_tag"])
 		checkError(err)
 
 		outputJson(fullInventory)
@@ -248,13 +48,13 @@ func main() {
 	}
 
 	if !*list && *host != "" {
-		hostVariables, err := listHost(state, *host, instanceNameTagEnv)
+		hostVariables, err := listHost(state, *host, config.Options["instance_name_tag"])
 		checkError(err)
 
 		outputJson(hostVariables)
 		os.Exit(0)
 	}
 
-	fmt.Println("No action given...")
+	fmt.Fprintf(os.Stderr, "No action given. Look at the help output.\n\n")
 	os.Exit(1)
 }
